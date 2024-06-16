@@ -1,0 +1,301 @@
+---
+title: "Data ExplORation: The Office"
+author: "OmnipotentTurnip"
+date: "27/01/2021"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Intro
+Uses the TidyTuesday 'The Office' data set from 2020-03-17 which can be found here:
+<https://github.com/rfordatascience/tidytuesday/blob/master/data/2020/2020-03-17/readme.md>
+
+### Approaches taken
+Some initial plots of the imdb ratings for each season and episode, mostly playing about with ggplot's theme options. The plan was to continue this for directors. During the process typos were spotted in some of the director names, so I went down a rabbit hole off producing some code to correct them instead of going through the list manually.
+
+## Libraries
+  - **schrute** contains schrute::theoffice, which provides the full 'The Office' data set.
+  - **ggplot2** used for all plots
+  - **dplyr** for piping and data frame manipulation
+  - **stringdist** used for identifying typos and incorrect spelling of names within 'The Office' data set
+  - **plotly** purely for making pretty plots
+
+```{r libraries, message=FALSE}
+library(schrute)
+library(ggplot2)
+library(dplyr)
+library(stringdist)
+library(plotly)
+```
+
+## Part 1: Some plots
+I started off with the reduced data set from github, more because I'm lazy I didn't want to work out what all the columns in the schrute data were doing straight away.
+
+```{r read_data, message = FALSE}
+office_ratings <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-03-17/office_ratings.csv')
+```
+
+```{r office_data, echo = FALSE}
+print(office_ratings)
+```
+
+Spent a bit of time playing around with ggplot theme here. Mostly sparked by the original 'blues' colourbrewer palette I was using very pale and light colours for 9 categories which made it hard to see on a white background. I didn't want a gray background so I made everything black <font size = "1">like my soul...</font>.
+
+```{r plot_theme}
+my_theme <- function (base_size = 11, base_family = "") {
+  theme(text = element_text(colour = "white"),
+        axis.text = element_text(colour = "white"),
+        line = element_line(colour = "white"),
+        axis.line = element_line(colour = "white"),
+        axis.ticks = element_line(colour = "white"),
+        plot.background = element_rect("black"),
+        panel.background = element_rect("black"),
+        legend.background = element_rect("black"),
+        legend.key = element_rect("black"),
+        panel.grid = element_blank(),
+        strip.background = element_rect("black"),
+        strip.text = element_text(colour = "white"))
+}
+```
+
+Now, immediately shoving this into a ggplot gives this
+
+```{r dodgy_legend_plot}
+ggplot(data = office_ratings, aes(x = imdb_rating, y = total_votes)) +
+  geom_point(aes(colour = season)) +
+  labs(colour = "Season") +
+  xlab("IMDB Rating") +
+  ylab("Total Votes") +
+  my_theme()
+```
+
+I don't know about you, but that legend disgusts me. What do you mean season 7.5. These seasons are discrete blocks of episodes. Also, I also want to be able to use a colour brewer palette here but these are discrete palettes which refuse to be shoved onto continuous scales like we have here. See below error:
+
+
+    ## Error: Continuous value supplied to discrete scale
+
+
+But that's fine, I'm getting rid of your silly continuous shenaningans anyway. The fix is simple, just convert the problem columns to factors. Voila! (Reminder: the problem column is 'Season'.)
+
+```{r season_point_plot}
+plot <- ggplot(data = office_ratings, aes(x = imdb_rating, y = total_votes)) +
+  geom_point(aes(colour = as.factor(season))) +
+  scale_color_brewer(palette = "RdPu") +
+  labs(colour = "Season") +
+  xlab("IMDB Rating") +
+  ylab("Total Votes") +
+  my_theme()
+ggplotly(plot)
+```
+
+I did the same for episodes but turns out that's too big a number
+
+```{r episode_point_plot}
+plot <- ggplot(data = office_ratings, aes(x = imdb_rating, y = total_votes)) +
+  geom_point(aes(colour = as.factor(episode))) +
+  scale_color_brewer(palette = "RdPu") +
+  labs(colour = "Season") +
+  xlab("IMDB Rating") +
+  ylab("Total Votes") +
+  my_theme()
+ggplotly(plot)
+```
+
+Looks like the maximum number for the "RdPu" palette is 9 so good job The Office US only had 9 seasons. Anyway, moving on. I wasn't sure how much the number of votes was telling us (maybe linked to popularity?) so I played around a bit with a jitter on the y axis.
+
+```{r season_jitter_plot}
+plot <- ggplot(data = office_ratings, aes(x = imdb_rating, y = jitter(rep(1, times = nrow(office_ratings))))) +
+  geom_point(aes(colour = as.factor(season))) +
+  scale_color_brewer(palette = "RdPu") +
+  labs (colour = "Season") +
+  xlab("IMDB Rating (/10)") +
+  ylab(element_blank()) +
+  my_theme() +
+  theme(axis.line.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+ggplotly(plot)
+```
+
+I think this version makes it easier to see that more of the earlier seasons hanging between and 8/0 IMDB rating and the later seasons more around 7/8. There are a few outliers (e.g. that 8000 votes episode from season 9). Given this and the existence of 'filler episodes', I moved on to plotting the average season and episode rating. First, some work to get the average:
+
+```{r get_averages, message = FALSE}
+season_average <- office_ratings %>%
+  group_by(season) %>%
+  summarise(avg_imdb_rating = mean(imdb_rating), min_imdb_rating = min(imdb_rating), max_imdb_rating = max(imdb_rating))
+season_average$type <- "season" # apply 'season' label to all rows, in preparation for rbind with episode_average
+season_average <- rename(season_average, "number" = "season")
+
+episode_average <- office_ratings %>%
+  group_by(episode) %>%
+  summarise(avg_imdb_rating = mean(imdb_rating), min_imdb_rating = min(imdb_rating), max_imdb_rating = max(imdb_rating))
+episode_average$type <- "episode" # apply 'episode' label to all rows, in preparation for rbind with season_average
+episode_average <- rename(episode_average, "number" = "episode")
+
+office_averages <- rbind(season_average, episode_average)
+```
+
+Now I have a table of all the season and episode averages (and and indicator as to which of those it is):
+
+```{r print_office_averages, echo = FALSE}
+print(office_averages)
+```
+
+and plotting this gives
+
+```{r averages_plot}
+plot <- ggplot(data = office_averages, aes(x = number, y = avg_imdb_rating, colour = type)) +
+  scale_color_brewer(palette = "RdPu") +
+  scale_x_continuous(breaks = seq(0, 27, 3)) +
+  facet_wrap(~ type, scales = "free_x") +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin = min_imdb_rating, ymax = max_imdb_rating)) +
+  xlab("Number") +
+  ylab("Average IMDB Rating (/10)") +
+  my_theme() +
+  theme(legend.position = "none")
+ggplotly(plot)
+```
+
+This isn't great since the season lengths vary quite a bit. Especially given we might expect say, a trend in the IMDB ratings for the season finale. So next a look at how the ratings shifted through each season
+
+```{r shifting_ratings_line}
+
+office_ratings$season <- paste0("Season ", office_ratings$season) # to make season labelling clearer in plots
+
+plot <- ggplot(data = office_ratings, aes(x = episode, y = imdb_rating, colour = season)) +
+  scale_color_brewer(palette = "RdPu") +
+  facet_wrap(nrow = 1, ~ season) +
+  geom_line() +
+  xlab("Episode") +
+  ylab("IMDB rating (/10)") +
+  my_theme() +
+  theme(legend.position = "none")
+ggplotly(plot)
+```
+
+which is a bit busy, so trying it out with **geom_smooth** as well to make things clearer.
+
+```{r shifting_ratings_smooth, warning = FALSE}
+ggplot(data = office_ratings, aes(x = episode, y = imdb_rating, colour = season)) +
+  scale_color_brewer(palette = "RdPu") +
+  facet_wrap(nrow = 1, ~ season) +
+  geom_smooth(se = FALSE, method = 'loess', formula = y ~ x) +
+  xlab("Episode") +
+  ylab("IMDB rating (/10)") +
+  my_theme() +
+  theme(legend.position = "none")
+```
+
+## Part 2: Correcting typos
+Next, I had a look at the schrute data set, which included details on the director. I wanted to do the same as before with the average IMDB rating. but this time for the director. 
+
+```{r schrute_data, echo = FALSE}
+office_text <- schrute::theoffice
+
+print(office_text)
+```
+
+Since each row of the data set represents a scripted line, first to reduce this to just a line per episode
+
+```{r episode_by_director, message = FALSE}
+director <- office_text %>%
+  group_by(season, episode) %>%
+  summarise(director = unique(director), imdb_rating = unique(imdb_rating))
+```
+
+then to find the average rating
+
+```{r director_average, message = FALSE}
+director_average <- director %>%
+  group_by(director) %>%
+  summarise(avg_imdb_rating = mean(imdb_rating), episode_count = n())
+
+```
+
+except there's a problem
+
+```{r print_director_average, echo = FALSE}
+print(director_average)
+```
+
+Note that  line 9 and 10 are the same person, but with a typo in one of the names. There are a couple more like this. Now I didn't fix this with my own intellect, it's entirely from here <https://stackoverflow.com/questions/45990947/how-to-find-a-typo-in-a-data-frame-and-replace-it>
+so I'll just be replicating the steps with the directors here. Start by using **stringdistmatrix** to work out how different the strings are from each other. This  version uses the Jaro-Winkler distance which, from my quick googling, is a good one for strings of different lengths (e.g. here one or two letters might be missing, not replaced with a different letter, thus shortening the word). I found these two resources contained useful examples and explanations of how the algorithms work
+  - <https://www.baeldung.com/cs/string-similarity-edit-distance>
+  - <https://itnext.io/string-similarity-the-basic-know-your-algorithms-guide-3de3d7346227>
+In the stackoverflow response, a dendrogram was included. When we replicated it here it's a lot busier but oh well let's go for it
+
+``` {r dendogram, dpi = 200}
+dist.matrix <- stringdistmatrix(director_average$director, director_average$director ,method='jw' ,p=0.1)
+row.names(dist.matrix)<-director_average$director
+names(dist.matrix)<-director_average$director
+dist.matrix<-as.dist(dist.matrix)
+
+clusts<-hclust(dist.matrix,method="ward.D2")
+plot(clusts, cex = 0.7)
+```
+
+So it looks like it's doing a pretty good job of picking out the typos. Although there's a couple of multi-director episodes that I really should have split out first. Oh well, we're just playing around here and don't have time for that. But obviously if you were doing this properly...Anyway. So now we can correct the typos, where it's suggested we use the mode to pick out the correct spelling. I used the summarised version to make the dendrogram more viewable but obviously here each spelling is only appearing once. Really we need the original director data frame if we want the mode. So repeat the steps to find the distance matrix. You then choose a sensible place to 'cut' your tree (here I've chosen h = 0.1 through a bit of trial and error) to assign names to the same group.
+
+```{r correct_spellings}
+dist.matrix <- stringdistmatrix(director$director, director$director ,method='jw' ,p=0.1)
+row.names(dist.matrix)<-director$director
+names(dist.matrix)<-director$director
+dist.matrix<-as.dist(dist.matrix)
+
+clusts<-hclust(dist.matrix,method="ward.D2")
+
+director$LikelyGroup<-cutree(clusts, h=0.1)
+```
+
+Which leaves us with a data frame that looks like this
+
+```{r likely_group, echo = FALSE}
+print(director)
+```
+
+You can see same name = same group, and if we take a closer look at Charles McDougal(l) we'll see our typo is included in the same group too.
+
+```{r charles_mcdougall, echo = FALSE}
+print(director[director$director %in% c("Charles McDougal", "Charles McDougall"),])
+```
+
+To correct the misspellings, we use the mode (where we have to make our own function for this since R doesn't have one built in) to find the most common spelling and assume that's the correct version.
+
+```{r correct_spelling}
+Mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+director <-director %>%
+  group_by(LikelyGroup) %>%
+  mutate(director=Mode(director))
+```
+
+So now we've corrected the typos we can summarise
+
+```{r final_summary, message = FALSE}
+director_average <- director %>%
+  group_by(director) %>%
+  summarise(avg_imdb_rating = mean(imdb_rating), episode_count = n())
+```
+
+and just for fun let's have a look at the cluster dendrogram again to see what's changed
+
+``` {r changes_dendogram, echo = FALSE, dpi = 200}
+dist.matrix <- stringdistmatrix(director_average$director, director_average$director ,method='jw' ,p=0.1)
+row.names(dist.matrix)<-director_average$director
+names(dist.matrix)<-director_average$director
+dist.matrix<-as.dist(dist.matrix)
+
+clusts<-hclust(dist.matrix,method="ward.D2")
+plot(clusts, cex = 0.7)
+```
